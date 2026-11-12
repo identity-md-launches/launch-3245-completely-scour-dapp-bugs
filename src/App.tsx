@@ -6,6 +6,7 @@ import {
   SEVERITY_ORDER,
   findings,
   improvements,
+  locLabel,
   sourceUrl,
   type Finding,
   type Severity,
@@ -15,7 +16,7 @@ type Filter = 'all' | Severity;
 
 const matches = (f: Finding, q: string) => {
   if (!q) return true;
-  const hay = [f.id, f.title, f.area, f.now, f.impact, f.fix, ...f.locations.map((l) => `${l.path}:${l.line} ${l.note ?? ''}`)]
+  const hay = [f.id, f.title, f.area, f.now, f.impact, f.fix, ...f.locations.map((l) => `${locLabel(l.path, l.line)} ${l.note ?? ''}`)]
     .join(' ')
     .toLowerCase();
   return q
@@ -58,7 +59,7 @@ function FindingCard({ f, open, onToggle }: { f: Finding; open: boolean; onToggl
           </span>
           <span className="finding-title">{f.title}</span>
           <span className="finding-meta">
-            {f.area} · {f.locations[0].path.replace(/^dapp\//, '')}:{f.locations[0].line}
+            {f.area} · {locLabel(f.locations[0].path.replace(/^dapp\//, ''), f.locations[0].line)}
           </span>
           <svg className="chev" aria-hidden="true" viewBox="0 0 16 16" width="16" height="16">
             <path d="M4 6l4 4 4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
@@ -87,7 +88,7 @@ function FindingCard({ f, open, onToggle }: { f: Finding; open: boolean; onToggl
           {f.locations.map((l) => (
             <li key={`${l.path}:${l.line}`}>
               <a href={sourceUrl(l)} target="_blank" rel="noopener noreferrer" className="mono">
-                {l.path}:{l.line}
+                {locLabel(l.path, l.line)}
               </a>
               {l.note && <span className="loc-note"> {l.note}</span>}
             </li>
@@ -249,16 +250,26 @@ export default function App() {
               <span className="mono">tacit.js</span>. The review swept all of it for known risk patterns: chain checks
               before each <span className="mono">eth_sendTransaction</span>, HTML sinks, key and note storage, random
               sources, float-to-integer amounts, module loading and the service worker. Every finding was then read in
-              context and its line numbers pinned to commit {COMMIT_SHORT}.
+              context, including the branch guards between a source and a sink, and its line numbers pinned to commit{' '}
+              {COMMIT_SHORT}.
             </p>
             <p>
               Severity follows impact: High breaks a primary flow or can send a transaction to the wrong place; Medium
               misleads the user or weakens a safety check; Low is a latent risk or a privacy leak with limited reach.
             </p>
             <p>
-              Limits: this is a static review. No wallet was connected and no transaction was sent. The Solidity
-              contracts, the zero-knowledge circuits, the relay and worker services, and the admin pages were out of
-              scope. The one live check was a HEAD request to tacit.finance for its security headers (L6).
+              The four admin pages in <span className="mono">dapp/admin/</span> (gas-relay, proof-market, tacit-chain
+              and token-pools) are covered too: their wallet connection, chain checks, simulation, send, receipt and
+              rendering code (M5, L8 to L11). All four render through textContent, keep nothing in storage and send no
+              ETH value. Their findings cite a code snippet you can search for in the linked file at {COMMIT_SHORT}
+              instead of a line number.
+            </p>
+            <p>
+              Limits: this is a static review. No wallet was connected, no transaction was sent and no admin deploy was
+              simulated, so wallet-specific switch behaviour, a pending deploy and RPC outages were read from the code,
+              not observed. The kit.json, kits.json and hub.json files those pages load at run time, the Solidity
+              contracts, the zero-knowledge circuits, and the relay and worker services were not reviewed. The one live
+              check was a HEAD request to tacit.finance for its security headers (L6).
             </p>
           </div>
         </section>

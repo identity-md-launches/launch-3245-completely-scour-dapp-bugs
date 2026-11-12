@@ -2,7 +2,8 @@ export type Severity = 'high' | 'medium' | 'low';
 
 export interface Location {
   path: string;
-  line: number;
+  /** Omitted where only a searchable snippet was pinned (see note). */
+  line?: number;
   note?: string;
 }
 
@@ -22,7 +23,8 @@ export const REPO = 'https://github.com/z0r0z/tacit';
 export const COMMIT = '2a3ec21c62f4af6bd88e72c525c242a08700c246';
 export const COMMIT_SHORT = COMMIT.slice(0, 7);
 
-export const sourceUrl = (l: Location) => `${REPO}/blob/${COMMIT}/${l.path}#L${l.line}`;
+export const sourceUrl = (l: Location) => `${REPO}/blob/${COMMIT}/${l.path}${l.line ? `#L${l.line}` : ''}`;
+export const locLabel = (path: string, line?: number) => (line ? `${path}:${line}` : path);
 
 export const SEVERITY_LABEL: Record<Severity, string> = { high: 'High', medium: 'Medium', low: 'Low' };
 export const SEVERITY_ORDER: Severity[] = ['high', 'medium', 'low'];
@@ -30,24 +32,6 @@ export const SEVERITY_ORDER: Severity[] = ['high', 'medium', 'low'];
 export const findings: Finding[] = [
   {
     id: 'h1',
-    severity: 'high',
-    area: 'Modules and caching',
-    title: 'The farm tab loads a second, signed-out copy of tacit.js',
-    locations: [
-      { path: 'dapp/index.html', line: 4456, note: "page loads '/tacit.js?cb=b45e21d5'" },
-      { path: 'dapp/tacit.js', line: 61872, note: "import('./amm-farm-ui.js')" },
-      { path: 'dapp/amm-farm-ui.js', line: 12, note: "import { wallet } from './tacit.js'" },
-      { path: 'dapp/amm-farm-actions.js', line: 23, note: "} from './tacit.js'" },
-      { path: 'dapp/confidential-btc-call-actions.js', line: 13, note: 'same bare import' },
-      { path: 'dapp/sw.js', line: 72, note: "'/tacit.js' is cache-first" },
-    ],
-    now: "The page imports the bundle as /tacit.js?cb=…, but amm-farm-ui.js, amm-farm-actions.js and confidential-btc-call-actions.js import './tacit.js' with no query. Browsers key ES modules by full URL, so the farm tab evaluates the 2.97 MB module a second time. That copy has its own `const wallet = {…}` (tacit.js:767), which nobody unlocked, and it re-runs every top-level statement. The service worker serves the bare /tacit.js cache-first, and its cleanup (sw.js:328) only drops entries that carry a ?cb= token, so that copy stays on the first build a visitor cached.",
-    impact: 'In the farm tab `wallet?.pub` (amm-farm-ui.js:146) reads the empty copy, so bonder and position features act as if nobody is signed in. Farm recovery (tacit.js:20498) runs against state that does not match the page. After a deploy, returning visitors run old farm code next to the new bundle. Each first visit also downloads and parses an extra 3 MB.',
-    fix: "Pass the loaded module in instead of importing it again: have tacit.js call `initFarmsTab(api)` with the exports the farm code needs, or add an import map that maps './tacit.js' to the page's ?cb= URL. In sw.js, serve the bare /tacit.js network-first, like the other files without a token.",
-    code: "// tacit.js\nconst { initFarmsTab } = await import('./amm-farm-ui.js');\ninitFarmsTab({ wallet, /* …the exports it uses */ });\n\n// amm-farm-ui.js: no import from './tacit.js'\nexport function initFarmsTab({ wallet }) { … }",
-  },
-  {
-    id: 'h2',
     severity: 'high',
     area: 'Ethereum transactions',
     title: 'The tETH withdraw sends without checking which chain the wallet is on',
@@ -61,7 +45,7 @@ export const findings: Finding[] = [
     ],
     now: "bridgeWithdrawETH reads HEADER_RELAY() and tipHeight() through the wallet's provider, builds the proof calldata and calls eth_sendTransaction to the bridge address. Nothing reads eth_chainId first. _bridgeConnectEth keeps the provider in `_bridgeEthProvider`, so a wallet moved to Base or Sepolia after connecting is used as-is. Other send paths in the same file (tacit.js:3829) do check.",
     impact: "On the wrong network the relay read returns another chain's state, or nothing, and the withdraw goes to an address that is not the bridge there. The visitor pays gas for a transaction that cannot work, and the UI reports a withdraw failure it cannot explain. The exported bridgeBatchDepositETH sends ETH value with the same gap, so any caller of it can send funds on the wrong chain.",
-    fix: 'Before every read and send in these two functions, require the bridge chain: switch, read eth_chainId again, and refuse when it still differs. Better, route every send through one helper (see the trade/wallet.js:100 pattern below).',
+    fix: 'Before every read and send in these two functions, require the bridge chain: switch, read eth_chainId again, and refuse when it still differs. Better, route every send through one helper (see the trade/wallet.js:100 pattern under the changes below).',
     code: "async function requireChain(provider, chainId) {\n  const want = '0x' + Number(chainId).toString(16);\n  const now = () => provider.request({ method: 'eth_chainId' });\n  if ((await now()).toLowerCase() === want) return;\n  await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });\n  if ((await now()).toLowerCase() !== want) throw new Error('Switch your wallet to Ethereum mainnet, then try again.');\n}",
   },
   {
@@ -81,22 +65,6 @@ export const findings: Finding[] = [
   {
     id: 'm2',
     severity: 'medium',
-    area: 'Rendering',
-    title: 'Error text from wallets and RPCs is written into the page as HTML',
-    locations: [
-      { path: 'dapp/tacit.js', line: 40343, note: 'depositStatus.innerHTML = _bridgePipeline.message' },
-      { path: 'dapp/tacit.js', line: 39843, note: "_bridgePipelineUpdate('error', e.message …)" },
-      { path: 'dapp/tacit.js', line: 39942 },
-      { path: 'dapp/tacit.js', line: 40124 },
-    ],
-    now: 'The bridge stores raw exception messages in _bridgePipeline.message and later assigns that string to innerHTML. The messages come from wallet extensions, public RPC nodes, mempool APIs and the indexer.',
-    impact: "The page's CSP allows only hashed scripts, so injected script will not run. Injected markup still renders: a link, a fake button or a form inside the dapp's own status line, worded by whoever controls that error text.",
-    fix: 'Use textContent for status text. Where a status needs markup (a link to the transaction), build the element with createElement and set its text separately.',
-    code: 'if (depositStatus) depositStatus.textContent = _bridgePipeline.message;',
-  },
-  {
-    id: 'm3',
-    severity: 'medium',
     area: 'Ethereum transactions',
     title: 'A network switch is trusted without reading the chain again',
     locations: [
@@ -110,7 +78,7 @@ export const findings: Finding[] = [
     fix: 'Use the requireChain helper above in all four places, and call it inside `send` itself so a closure created earlier still checks at send time.',
   },
   {
-    id: 'm4',
+    id: 'm3',
     severity: 'medium',
     area: 'Key management',
     title: 'A new CDP position can reuse a key when the chain walk fails',
@@ -125,7 +93,7 @@ export const findings: Finding[] = [
     code: "if (onchain == null) throw new Error('Could not read your positions from the chain, so the next key index is unknown. Nothing was opened. Try again when the RPC answers.');",
   },
   {
-    id: 'm5',
+    id: 'm4',
     severity: 'medium',
     area: 'Ethereum reads',
     title: 'A cached chain check sends reads to the wrong network for 30 seconds',
@@ -137,6 +105,22 @@ export const findings: Finding[] = [
     impact: "After the user switches the wallet to another network, receipt polls and eth_calls go to that network for up to 30 seconds. A receipt read as missing only delays things; a contract read can return another chain's data.",
     fix: "Reset the cache on the provider's chainChanged event, or read through the public RPC list only, so the wallet's network never decides what the app reads.",
     code: "provider.on?.('chainChanged', () => { _ethProviderChainOkUntil = 0; });",
+  },
+  {
+    id: 'm5',
+    severity: 'medium',
+    area: 'Admin pages',
+    title: 'The admin deploy pages send to whichever chain the wallet is on',
+    locations: [
+      { path: 'dapp/admin/proof-market/index.html', note: "deploy(): if (W.chain !== k.chainId) reads a cached value" },
+      { path: 'dapp/admin/gas-relay/index.html', note: 'deploy(): same cached W.chain check' },
+      { path: 'dapp/admin/tacit-chain/index.html', note: 'deploy(i): no chain check; only the button gate `W.chain === KIT.chainId`' },
+      { path: 'dapp/admin/token-pools/index.html', note: 'send(): await stateOf(kit) runs after the last eth_chainId read' },
+    ],
+    now: "proof-market and gas-relay compare W.chain, a value read at connect and updated by the chainChanged listener. tacit-chain checks it only when it draws the Deploy button. Each deploy then awaits an eth_call and an eth_estimateGas on public RPCs and calls eth_sendTransaction with no chainId field and no fresh eth_chainId. token-pools re-reads the chain after a switch, then awaits stateOf() before it sends.",
+    impact: "CreateX has the same address on many chains. A wallet that changes network during those awaits, or one that does not emit chainChanged, sends a deploy that can succeed on the wrong chain. The deployer pays gas there, and the simulation that passed ran on the intended chain only.",
+    fix: 'Call the requireChain helper from H1 as the last await before eth_sendTransaction, and pass the chainId the kit expects. Disable the button while it runs (see L8).',
+    code: "await requireChain(W.prov, k.chainId); // last await before sending\nconst hash = await ask('eth_sendTransaction', [{ from: W.account, to: k.factory, data, gas }]);",
   },
   {
     id: 'l1',
@@ -183,7 +167,7 @@ export const findings: Finding[] = [
     title: 'evm-wallet.js exports a send with no chain check',
     locations: [{ path: 'dapp/evm-wallet.js', line: 262, note: 'fundTx' }],
     now: 'fundTx sends eth_sendTransaction, value included, without reading the chain. Nothing in the dapp calls it today, but it is part of the returned wallet API.',
-    impact: 'The next feature that picks it up inherits the wrong-network bug in H2.',
+    impact: 'The next feature that picks it up inherits the wrong-network bug in H1.',
     fix: 'Add the same requireChain guard, or remove the export until it is used.',
   },
   {
@@ -209,20 +193,89 @@ export const findings: Finding[] = [
     impact: 'No exposure today. The stale comment invites the next editor to change the file and expect nothing to happen, or to change the dashboard and leave the file wrong.',
     fix: 'Rewrite the comment to name the host that serves these headers, and add a CI step that compares `curl -sI https://tacit.finance/` against the file.',
   },
+  {
+    id: 'l7',
+    severity: 'low',
+    area: 'Modules and caching',
+    title: "Unused farm modules import a bare './tacit.js'",
+    locations: [
+      { path: 'dapp/tacit.js', line: 61869, note: 'initializer runs only when !globalThis.__TACIT_NO_INIT__' },
+      { path: 'dapp/tacit.js', line: 61872, note: "import('./amm-farm-ui.js')" },
+      { path: 'dapp/tacit-session.js', line: 11, note: '__TACIT_NO_INIT__ = true before import(url)' },
+      { path: 'dapp/amm-farm-ui.js', line: 12, note: "import { wallet } from './tacit.js'" },
+      { path: 'dapp/amm-farm-actions.js', line: 23, note: "} from './tacit.js'" },
+      { path: 'dapp/confidential-btc-call-actions.js', line: 13, note: 'same bare import' },
+      { path: 'dapp/sw.js', line: 72, note: "'/tacit.js' is cache-first" },
+    ],
+    now: "amm-farm-ui.js, amm-farm-actions.js and confidential-btc-call-actions.js import './tacit.js' with no ?cb= token. The only path to them is tacit.js's own initializer (61869 to 61872). The current index.html loads Tacit through makeTacitSession, which sets __TACIT_NO_INIT__ = true first, so that initializer does not run. The live farm tab uses farm-ops.js, which receives the module as a parameter.",
+    impact: 'No visitor impact at this commit. If anything imports these modules again, the browser keys ES modules by full URL and evaluates a second, signed-out copy of the 2.97 MB bundle. sw.js would also serve that bare /tacit.js cache-first from whichever build the visitor cached first.',
+    fix: 'Delete the unused modules, or make them take the Tacit module as a parameter like farm-ops.js does. In sw.js, serve the bare /tacit.js network-first.',
+  },
+  {
+    id: 'l8',
+    severity: 'low',
+    area: 'Admin pages',
+    title: 'Admin Deploy buttons stay enabled while a deploy is running',
+    locations: [
+      { path: 'dapp/admin/proof-market/index.html', note: "disabled: !ready || state === 'open'" },
+      { path: 'dapp/admin/gas-relay/index.html', note: "disabled: !ready || state === 'open'" },
+      { path: 'dapp/admin/tacit-chain/index.html', note: 'disabled: !ready; deploy(i) only resets S[i].log' },
+    ],
+    now: 'deploy() sets no busy flag. Status updates redraw the button, and it comes back enabled during the simulation, the gas estimate and the wallet prompt.',
+    impact: 'A second click starts a second deploy and a second wallet prompt, and resets the status log. If the deployer signs both, the second transaction reverts on the occupied address and still costs gas.',
+    fix: 'Set a busy flag when deploy() starts, include it in disabled, and clear it in a finally block.',
+  },
+  {
+    id: 'l9',
+    severity: 'low',
+    area: 'Admin pages',
+    title: "An RPC failure is shown as 'not deployed'",
+    locations: [
+      { path: 'dapp/admin/gas-relay/index.html', note: "refresh(): hasCode(KIT.expected).catch(() => false)" },
+      { path: 'dapp/admin/proof-market/index.html', note: 'refresh(): same catch' },
+    ],
+    now: "refresh() turns any error from hasCode into false, and draw() then prints 'not deployed'.",
+    impact: 'When every RPC in the kit fails, the page says the contract is missing and offers Deploy. That invites a deploy that is not needed and hides the real problem.',
+    fix: "Keep a third state, 'unknown'. Show the RPC error and keep Deploy disabled until a read succeeds.",
+  },
+  {
+    id: 'l10',
+    severity: 'low',
+    area: 'Admin pages',
+    title: 'The deploy pages show an init-code hash they never check',
+    locations: [
+      { path: 'dapp/admin/tacit-chain/index.html', note: "row('Init code hash', step.initHash)" },
+      { path: 'dapp/admin/gas-relay/index.html', note: "row('Init code hash', k.initHash)" },
+      { path: 'dapp/admin/proof-market/index.html', note: "row('Init code hash', k.initHash)" },
+    ],
+    now: "The pages display initHash from kit.json but never hash initCode. tacit-chain and gas-relay deploy through CREATE3, whose address depends only on the deployer and the salt, so the address check passes for any init code. tacit-chain's intro says the transaction is sent only if it creates exactly the contract at exactly the address shown.",
+    impact: 'A kit.json whose initCode drifted from the reviewed build would deploy that code at the expected address, and the page would report success.',
+    fix: "Compute keccak256(initCode) in the page and refuse to deploy when it differs from initHash. After the deploy, compare the hash of eth_getCode with the expected runtime code hash.",
+  },
+  {
+    id: 'l11',
+    severity: 'low',
+    area: 'Admin pages',
+    title: 'token-pools loops over a count taken straight from RPC data',
+    locations: [{ path: 'dapp/admin/token-pools/index.html', note: 'madeBy(): const base = at(0), n = at(base); for (let i = 0; i < n; i++)' }],
+    now: 'madeBy reads the number of created addresses from the eth_call return data and loops that many times with no upper limit or length check.',
+    impact: 'A faulty or hostile RPC in the fallback list can return a huge count and freeze the admin tab.',
+    fix: 'Check that base + 32 × (n + 1) fits inside the return data, and cap n at the number of contracts the kit expects.',
+  },
 ];
 
 export const improvements: { title: string; body: string }[] = [
   {
     title: 'One send helper for every transaction',
-    body: 'Sixteen files call eth_sendTransaction directly, each with its own chain check or none. trade/wallet.js:100 already has the right shape (switch, read again, refuse, and confirm the account did not change). Export it and route every send through it; H2, M3 and L4 then close together.',
+    body: 'Sixteen files call eth_sendTransaction directly, each with its own chain check or none. trade/wallet.js:100 already has the right shape (switch, read again, refuse, and confirm the account did not change). Export it and route every send through it; H1, M2, M5 and L4 then close together.',
   },
   {
     title: 'Ban innerHTML with non-literal strings',
-    body: 'There are about 950 innerHTML assignments. A lint rule (no-unsanitized/property) or a tagged `html` template that escapes its values would catch the next M2 at review time instead of in production.',
+    body: 'There are about 950 innerHTML assignments. Most interpolate escaped values. Some, like the bridge status line at tacit.js:40343, are safe only because a branch before them keeps error text away. Guards like that are easy to lose: set status text with textContent, and add a lint rule (no-unsanitized/property) or a tagged `html` template that escapes its values, so a raw error string can never reach one of these sinks.',
   },
   {
     title: 'Split tacit.js and load modules through an import map',
-    body: 'tacit.js is one 62,000-line, 2.97 MB module. Splitting it by tab, with an import map that pins every module to its ?cb= URL, shortens first load and makes duplicate instances like H1 impossible.',
+    body: 'tacit.js is one 62,000-line, 2.97 MB module. Splitting it by tab, with an import map that pins every module to its ?cb= URL, shortens first load and makes duplicate instances like L7 impossible.',
   },
   {
     title: 'Parse every amount as a decimal string',
@@ -230,6 +283,6 @@ export const improvements: { title: string; body: string }[] = [
   },
   {
     title: 'Test the failure states',
-    body: 'Add unit tests for a reverted receipt (M1), a switch that does not switch (M3), and a chain walk that throws with a non-zero local count (M4). Each is a few lines with a stub provider, and each failed here without anyone noticing.',
+    body: 'Add unit tests for a reverted receipt (M1), a switch that does not switch (M2), and a chain walk that throws with a non-zero local count (M3). Each is a few lines with a stub provider, and each failed here without anyone noticing.',
   },
 ];

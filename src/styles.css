@@ -179,6 +179,7 @@ main,
 /* Controls */
 .controls {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-3);
   padding-bottom: var(--s-3);
 }
@@ -214,9 +215,13 @@ main,
   font-variant-numeric: tabular-nums;
   font-weight: var(--fw-bold);
 }
+.controls > * {
+  min-width: 0;
+}
 .search-row {
   display: flex;
   gap: var(--s-2);
+  max-width: 100%;
 }
 .search-row input {
   flex: 1;
@@ -276,9 +281,11 @@ main,
   margin: 0;
   padding: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-3);
 }
 .finding {
+  min-width: 0;
   border: 1px solid var(--line);
   border-left: 4px solid var(--line-strong);
   border-radius: var(--radius);
@@ -299,7 +306,7 @@ main,
 }
 .finding-toggle {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     'badge chev'
     'title chev'
@@ -367,11 +374,22 @@ main,
 .finding-body {
   padding: 0 var(--s-4) var(--s-4);
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-4);
+}
+/* display: grid above would otherwise override the hidden attribute */
+.finding-body[hidden] {
+  display: none;
+}
+.finding-body > *,
+.facts > *,
+.code-wrap > * {
+  min-width: 0;
 }
 .facts {
   margin: 0;
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-1);
 }
 .facts dt {
@@ -383,10 +401,12 @@ main,
 }
 .facts dd {
   margin: 0;
+  overflow-wrap: anywhere;
   max-width: var(--measure);
 }
 .code-wrap {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-2);
   justify-items: start;
 }
@@ -422,11 +442,16 @@ main,
 
 .empty {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--s-3);
   justify-items: start;
   padding: var(--s-5);
   border: 1px dashed var(--line-strong);
   border-radius: var(--radius);
+}
+.empty p {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* Later sections */

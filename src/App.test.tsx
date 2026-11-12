@@ -32,7 +32,7 @@ describe('review page', () => {
     render(<App />);
     fireEvent.change(screen.getByLabelText('Search findings'), { target: { value: 'sw.js' } });
     const ids = [...cards()].map((c) => c.id);
-    expect(ids).toContain('h1');
+    expect(ids).toContain('l7');
     expect(ids.length).toBeLessThan(findings.length);
   });
 
@@ -55,6 +55,15 @@ describe('review page', () => {
     expect(screen.getAllByRole('button', { expanded: true })).toHaveLength(findings.length);
     fireEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
     expect(screen.queryAllByRole('button', { expanded: true })).toHaveLength(0);
+    findings.forEach((f) => expect(document.getElementById(`${f.id}-body`)?.hidden).toBe(true));
+  });
+
+  it('finds the admin-page findings by path', () => {
+    render(<App />);
+    fireEvent.change(screen.getByLabelText('Search findings'), { target: { value: 'dapp/admin/' } });
+    const ids = [...cards()].map((c) => c.id);
+    expect(ids).toEqual(findings.filter((f) => f.locations.some((l) => l.path.startsWith('dapp/admin/'))).map((f) => f.id));
+    expect(ids).toContain('m5');
   });
 
   it('copies a fix to the clipboard', async () => {
@@ -71,6 +80,12 @@ describe('review page', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Expand all' }));
     const links = [...document.querySelectorAll('.locs a')] as HTMLAnchorElement[];
     expect(links.length).toBe(findings.reduce((n, f) => n + f.locations.length, 0));
-    links.forEach((a) => expect(a.href).toMatch(/github\.com\/z0r0z\/tacit\/blob\/2a3ec21c62f4af6bd88e72c525c242a08700c246\/dapp\/.+#L\d+$/));
+    const all = findings.flatMap((f) => f.locations);
+    links.forEach((a, i) => {
+      expect(a.href).toMatch(/github\.com\/z0r0z\/tacit\/blob\/2a3ec21c62f4af6bd88e72c525c242a08700c246\/dapp\/.+/);
+      // a line anchor exactly where a line was pinned; admin snippets link the file
+      if (all[i].line) expect(a.href.endsWith(`#L${all[i].line}`)).toBe(true);
+      else expect(a.href).not.toContain('#');
+    });
   });
 });
